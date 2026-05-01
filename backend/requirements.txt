@@ -1,0 +1,28 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.17
+pydantic==2.10.3
+pydantic-settings==2.7.0
+
+# Document parsing
+pymupdf==1.25.1
+python-docx==1.1.2
+openpyxl==3.1.5
+pandas==2.2.3
+pillow==11.0.0
+pytesseract==0.3.13
+
+# AI / Embeddings
+openai==1.57.4
+chromadb==0.5.23
+tiktoken==0.8.0
+
+# Session
+itsdangerous==2.2.0
+
+# File locking
+filelock==3.16.1
+
+# Utilities
+aiofiles==24.1.0
+httpx==0.28.1

@@ -49,6 +49,7 @@ function CitationCard({ citation }: { citation: Citation }) {
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user";
+  const [sourcesOpen, setSourcesOpen] = useState(false);
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -89,11 +90,28 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {!message.isLoading &&
           message.citations &&
           message.citations.length > 0 && (
-            <div className="max-w-[85%] w-full space-y-1">
-              <p className="text-xs text-gray-500 px-1">Sources</p>
-              {message.citations.map((c, i) => (
-                <CitationCard key={i} citation={c} />
-              ))}
+            <div className="max-w-[85%] w-full">
+              <button
+                className="w-full flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-750 text-left rounded-lg border border-gray-700"
+                onClick={() => setSourcesOpen((v) => !v)}
+              >
+                <FileText className="w-3.5 h-3.5 text-brand-400 flex-shrink-0" />
+                <span className="text-xs text-gray-300 flex-1">
+                  Sources ({message.citations.length})
+                </span>
+                {sourcesOpen ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-gray-500" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-gray-500" />
+                )}
+              </button>
+              {sourcesOpen && (
+                <div className="mt-1 space-y-1">
+                  {message.citations.map((c, i) => (
+                    <CitationCard key={i} citation={c} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
       </div>

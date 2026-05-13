@@ -238,7 +238,7 @@ export default function DocumentPanel({
                   <div className="flex items-center gap-1.5">
                     {fileIcon(doc.file_type)}
                     <span className="text-xs font-medium text-gray-200 truncate">
-                      {doc.name}
+                      {doc.id}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">

@@ -223,7 +223,7 @@ def query(
         try:
             results = collection.query(
                 query_embeddings=[q_embedding],
-                n_results=n_results,
+                n_results=max(n_results * 4, 20),
                 where=where,
                 include=["documents", "metadatas", "distances"],
             )
@@ -247,7 +247,28 @@ def query(
                     "distance": dist,
                 }
             )
-        return chunks
+        # Hybrid reranking:
+        # 1) semantic relevance from vector distance
+        # 2) lexical relevance from token overlap
+        # Lower score is better.
+        sw = max(0.0, float(settings.semantic_weight))
+        lw = max(0.0, float(settings.lexical_weight))
+        total = sw + lw
+        if total <= 0:
+            sw, lw = 0.75, 0.25
+            total = 1.0
+        sw /= total
+        lw /= total
+
+        rescored = []
+        for chunk in chunks:
+            semantic_score = float(chunk["distance"])
+            lexical_score = _fallback_distance(question, chunk["text"])
+            hybrid_score = sw * semantic_score + lw * lexical_score
+            rescored.append({**chunk, "distance": hybrid_score})
+
+        rescored.sort(key=lambda item: item["distance"])
+        return rescored[:n_results]
 
     rows = _fallback_load()
     visible_rows = []

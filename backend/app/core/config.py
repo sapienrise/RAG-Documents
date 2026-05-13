@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     max_file_size_mb: int = 100
     session_secret: str = "change-me-in-production"
     cors_origins: str = "http://localhost:3000"
+    semantic_weight: float = 0.75
+    lexical_weight: float = 0.25
 
     @property
     def cors_origins_list(self) -> List[str]:

@@ -29,6 +29,14 @@ async def _process_document(doc: Document) -> None:
         doc.status = "failed"
         doc.error_message = str(e)
     finally:
+        # Remove the original uploaded file after processing completes
+        # (success or failure). Indexed chunks and metadata are retained.
+        if doc.file_path and os.path.exists(doc.file_path):
+            try:
+                os.remove(doc.file_path)
+            except Exception:
+                pass
+            doc.file_path = ""
         storage.upsert_document(doc)
 
 

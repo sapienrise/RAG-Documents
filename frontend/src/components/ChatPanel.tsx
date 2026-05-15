@@ -29,8 +29,7 @@ function CitationCard({ citation }: { citation: Citation }) {
       >
         <FileText className="w-3.5 h-3.5 text-brand-400 flex-shrink-0" />
         <span className="text-gray-300 flex-1 truncate">
-          {citation.document_name}
-          {citation.page_number ? ` · Page ${citation.page_number}` : ""}
+          {citation.page_number ? `Page ${citation.page_number}` : "Source"}
         </span>
         {expanded ? (
           <ChevronUp className="w-3.5 h-3.5 text-gray-500" />

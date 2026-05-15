@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     semantic_weight: float = 0.75
     lexical_weight: float = 0.25
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8001/api/drive/callback"
+    frontend_url: str = "http://localhost:3005"
+    database_url: str = ""
 
     @property
     def cors_origins_list(self) -> List[str]:

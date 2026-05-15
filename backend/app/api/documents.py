@@ -5,7 +5,7 @@ import shutil
 from fastapi import APIRouter, UploadFile, File, Form, Request, Response, HTTPException, BackgroundTasks
 from typing import Literal
 from app.core.config import settings
-from app.core.session import get_session_id, set_session_cookie
+from app.core.session import get_session_id, set_session_cookie, get_actor_id
 from app.models.document import Document, DocumentResponse
 from app.services import storage, parser, vector_store
 
@@ -49,6 +49,7 @@ async def upload_document(
     visibility: Literal["public", "private"] = Form("public"),
 ):
     session_id = get_session_id(request)
+    actor_id = get_actor_id(request)
     set_session_cookie(response, session_id)
 
     # Validate file type
@@ -75,7 +76,7 @@ async def upload_document(
         file_type=file_type,
         size_bytes=len(content),
         visibility=visibility,
-        session_id=session_id if visibility == "private" else None,
+        session_id=actor_id if visibility == "private" else None,
         status="processing",
     )
     file_path = os.path.join(settings.storage_dir, f"{doc.id}{ext}")
@@ -95,20 +96,21 @@ async def upload_document(
 @router.get("", response_model=list[DocumentResponse])
 async def list_documents(request: Request, response: Response):
     session_id = get_session_id(request)
+    actor_id = get_actor_id(request)
     set_session_cookie(response, session_id)
-    docs = storage.list_documents(session_id)
+    docs = storage.list_documents(actor_id)
     return [DocumentResponse(**d.model_dump()) for d in docs]
 
 
 @router.delete("/{doc_id}")
 async def delete_document(doc_id: str, request: Request):
-    session_id = get_session_id(request)
+    actor_id = get_actor_id(request)
     doc = storage.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Only uploader can delete private docs; anyone can delete public docs
-    if doc.visibility == "private" and doc.session_id != session_id:
+    if doc.visibility == "private" and doc.session_id != actor_id:
         raise HTTPException(status_code=403, detail="Not authorized to delete this document")
 
     # Remove from vector store

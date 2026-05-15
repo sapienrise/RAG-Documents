@@ -36,3 +36,19 @@ export interface ChatResponse {
   answer: string;
   citations: Citation[];
 }
+
+export interface AuthUser {
+  sub: string;
+  email: string;
+  name: string;
+  picture: string;
+}
+
+export interface DriveSettings {
+  google_client_id: string;
+  google_client_secret: string;
+  google_drive_api_key: string;
+  google_redirect_uri: string;
+  frontend_url: string;
+  other_data: string;
+}

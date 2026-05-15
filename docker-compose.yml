@@ -1,0 +1,41 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: rag-backend
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-dummy}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_CHAT_MODEL: ${OPENAI_CHAT_MODEL:-gpt-4o}
+      CHROMA_PERSIST_DIR: /app/chroma_data
+      STORAGE_DIR: /app/storage
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-100}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:8001/api/drive/callback}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3005}
+      DATABASE_URL: ${DATABASE_URL}
+    volumes:
+      - rag_storage:/app/storage
+      - rag_chroma:/app/chroma_data
+    ports:
+      - "${BACKEND_PORT:-8001}:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+    container_name: rag-frontend
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-3005}:80"
+    restart: unless-stopped
+
+volumes:
+  rag_storage:
+  rag_chroma:

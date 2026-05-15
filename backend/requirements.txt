@@ -26,3 +26,5 @@ filelock==3.16.1
 # Utilities
 aiofiles==24.1.0
 httpx==0.28.1
+google-auth==2.38.0
+psycopg[binary]==3.2.9

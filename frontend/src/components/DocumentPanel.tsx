@@ -12,8 +12,12 @@ import {
   FileSpreadsheet,
   Image,
   File,
+  Link,
+  Download,
 } from "lucide-react";
 import type { Document, Visibility } from "../types";
+import { driveApi } from "../services/api";
+import toast from "react-hot-toast";
 
 interface Props {
   documents: Document[];
@@ -22,6 +26,7 @@ interface Props {
   onSelect: (ids: string[]) => void;
   onUpload: (file: File, visibility: Visibility) => Promise<unknown>;
   onDelete: (id: string) => void;
+  onRefresh: () => Promise<void>;
 }
 
 function fileIcon(type: string) {
@@ -68,9 +73,13 @@ export default function DocumentPanel({
   onSelect,
   onUpload,
   onDelete,
+  onRefresh,
 }: Props) {
   const [visibility, setVisibility] = useState<Visibility>("public");
   const [uploading, setUploading] = useState(false);
+  const [driveFiles, setDriveFiles] = useState<Array<{ id: string; name: string }>>([]);
+  const [driveConnected, setDriveConnected] = useState(false);
+  const [loadingDrive, setLoadingDrive] = useState(false);
 
   const onDrop = useCallback(
     async (acceptedFiles: File[]) => {
@@ -98,6 +107,56 @@ export default function DocumentPanel({
   };
 
   const readyDocs = documents.filter((d) => d.status === "ready");
+
+  const connectDrive = async () => {
+    try {
+      const res = await driveApi.authUrl();
+      const popup = window.open(res.url, "google-drive-oauth", "width=520,height=680");
+      if (!popup) {
+        toast.error("Popup blocked. Please allow popups.");
+        return;
+      }
+      const onMessage = (event: MessageEvent) => {
+        if (event.data?.type === "drive_oauth") {
+          if (event.data.status === "success") {
+            setDriveConnected(true);
+            toast.success("Google Drive connected");
+          } else {
+            toast.error("Google Drive connection failed");
+          }
+          window.removeEventListener("message", onMessage);
+        }
+      };
+      window.addEventListener("message", onMessage);
+    } catch {
+      toast.error("Could not start Google Drive OAuth");
+    }
+  };
+
+  const loadDriveFiles = async () => {
+    setLoadingDrive(true);
+    try {
+      const res = await driveApi.listFiles();
+      setDriveFiles((res.files || []).map((f) => ({ id: f.id, name: f.name })));
+      setDriveConnected(true);
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || "Could not load Drive files";
+      toast.error(msg);
+    } finally {
+      setLoadingDrive(false);
+    }
+  };
+
+  const importDriveFile = async (fileId: string) => {
+    try {
+      await driveApi.importFile(fileId, visibility);
+      toast.success("Drive file imported and processing started");
+      onRefresh();
+    } catch (err: any) {
+      const msg = err?.response?.data?.detail || "Drive import failed";
+      toast.error(msg);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-gray-900 border-r border-gray-700">
@@ -158,6 +217,41 @@ export default function DocumentPanel({
           <p className="text-xs text-gray-500 mt-0.5">
             PDF, DOCX, XLSX, CSV, TXT, Images
           </p>
+        </div>
+
+        <div className="rounded-lg border border-gray-700 bg-gray-850 p-2 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-300">Google Drive</span>
+            <button
+              onClick={connectDrive}
+              className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 inline-flex items-center gap-1"
+            >
+              <Link className="w-3 h-3" />
+              {driveConnected ? "Reconnect" : "Connect"}
+            </button>
+          </div>
+          <button
+            onClick={loadDriveFiles}
+            disabled={loadingDrive}
+            className="w-full text-xs px-2 py-1 rounded bg-brand-700 hover:bg-brand-600 disabled:opacity-60 text-white inline-flex items-center justify-center gap-1"
+          >
+            <Download className="w-3 h-3" />
+            {loadingDrive ? "Loading..." : "Load Drive Files"}
+          </button>
+          {driveFiles.length > 0 && (
+            <div className="max-h-32 overflow-y-auto space-y-1">
+              {driveFiles.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => importDriveFile(f.id)}
+                  className="w-full text-left text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 truncate"
+                  title={`Import ${f.name}`}
+                >
+                  {f.name}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

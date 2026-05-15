@@ -1,6 +1,6 @@
 """Chat endpoint."""
 from fastapi import APIRouter, Request, Response, HTTPException
-from app.core.session import get_session_id, set_session_cookie
+from app.core.session import get_session_id, set_session_cookie, get_actor_id
 from app.models.document import ChatRequest, ChatResponse
 from app.services import rag
 
@@ -14,6 +14,7 @@ async def chat_query(
     response: Response,
 ):
     session_id = get_session_id(request)
+    actor_id = get_actor_id(request)
     set_session_cookie(response, session_id)
 
     if not payload.question.strip():
@@ -22,7 +23,7 @@ async def chat_query(
     result = rag.answer(
         question=payload.question,
         history=payload.history,
-        session_id=session_id,
+        session_id=actor_id,
         document_ids=payload.document_ids,
     )
     return result

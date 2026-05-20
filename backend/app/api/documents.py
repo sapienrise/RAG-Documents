@@ -1,13 +1,12 @@
 """Document upload, list, delete endpoints."""
 import os
-import asyncio
-import shutil
 from fastapi import APIRouter, UploadFile, File, Form, Request, Response, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from typing import Literal
 from app.core.config import settings
 from app.core.session import get_session_id, set_session_cookie, get_actor_id
-from app.models.document import Document, DocumentResponse
-from app.services import storage, parser, vector_store
+from app.models.document import Document, DocumentResponse, DocumentVisibilityUpdateRequest
+from app.services import storage, parser, vector_store, credits
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -29,9 +28,9 @@ async def _process_document(doc: Document) -> None:
         doc.status = "failed"
         doc.error_message = str(e)
     finally:
-        # Remove the original uploaded file after processing completes
-        # (success or failure). Indexed chunks and metadata are retained.
-        if doc.file_path and os.path.exists(doc.file_path):
+        # Keep source files for public documents so they can be downloaded.
+        # Private documents follow the existing flow and remove source files.
+        if doc.visibility == "private" and doc.file_path and os.path.exists(doc.file_path):
             try:
                 os.remove(doc.file_path)
             except Exception:
@@ -67,6 +66,20 @@ async def upload_document(
         raise HTTPException(
             status_code=413,
             detail=f"File exceeds maximum size of {settings.max_file_size_mb} MB",
+        )
+
+    upload_cost = credits.calculate_upload_cost(len(content), file_type)
+    charged = credits.charge_usage(
+        actor_id=actor_id,
+        operation="file_upload",
+        credits_charged=upload_cost,
+        metadata='{"source":"documents.upload"}',
+    )
+    if not charged:
+        balance = credits.get_credit_balance(actor_id)
+        raise HTTPException(
+            status_code=402,
+            detail=f"Insufficient credits for upload. Balance: {balance}, required: {upload_cost}",
         )
 
     # Persist file
@@ -122,3 +135,45 @@ async def delete_document(doc_id: str, request: Request):
 
     storage.delete_document(doc_id)
     return {"success": True}
+
+
+@router.patch("/{doc_id}/visibility", response_model=DocumentResponse)
+async def update_document_visibility(doc_id: str, payload: DocumentVisibilityUpdateRequest, request: Request):
+    actor_id = get_actor_id(request)
+    doc = storage.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.visibility == "private" and doc.session_id != actor_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this document")
+
+    if payload.visibility == "private":
+        doc.visibility = "private"
+        doc.session_id = actor_id
+    else:
+        doc.visibility = "public"
+        doc.session_id = None
+
+    vector_store.update_document_visibility(
+        doc_id=doc.id,
+        visibility=doc.visibility,
+        session_id=doc.session_id,
+    )
+    storage.upsert_document(doc)
+    return DocumentResponse(**doc.model_dump())
+
+
+@router.get("/{doc_id}/download")
+async def download_document(doc_id: str, request: Request):
+    actor_id = get_actor_id(request)
+    doc = storage.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.visibility == "private" and doc.session_id != actor_id:
+        raise HTTPException(status_code=403, detail="Not authorized to download this document")
+
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        raise HTTPException(status_code=404, detail="Source file is not available for download")
+
+    return FileResponse(path=doc.file_path, filename=doc.name, media_type="application/octet-stream")

@@ -1,9 +1,15 @@
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+from typing import Literal
 from app.core.auth import require_user
 from app.core.session import get_actor_id
 from app.core.config import settings as app_settings
-from app.services.pg_settings import get_drive_settings, upsert_drive_settings
+from app.services.pg_settings import (
+    get_drive_settings,
+    upsert_drive_settings,
+    get_user_visibility_mode,
+    upsert_user_visibility_mode,
+)
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -15,6 +21,11 @@ class DriveSettingsPayload(BaseModel):
     google_redirect_uri: str
     frontend_url: str
     other_data: str = ""
+    default_visibility: Literal["public", "private"] = "public"
+
+
+class VisibilityModePayload(BaseModel):
+    visibility_mode: Literal["public", "private"]
 
 
 @router.get("/drive")
@@ -37,6 +48,7 @@ async def get_settings(request: Request):
         "google_redirect_uri": app_settings.google_redirect_uri,
         "frontend_url": app_settings.frontend_url,
         "other_data": "",
+        "default_visibility": "public",
     }
 
 
@@ -55,7 +67,30 @@ async def save_settings(payload: DriveSettingsPayload, request: Request):
             google_redirect_uri=payload.google_redirect_uri.strip(),
             frontend_url=payload.frontend_url.strip(),
             other_data=payload.other_data.strip(),
+            default_visibility=payload.default_visibility,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
     return {"success": True}
+
+
+@router.get("/visibility")
+async def get_visibility_mode(request: Request):
+    require_user(request)
+    actor_id = get_actor_id(request)
+    try:
+        mode = get_user_visibility_mode(actor_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return {"visibility_mode": mode}
+
+
+@router.put("/visibility")
+async def save_visibility_mode(payload: VisibilityModePayload, request: Request):
+    require_user(request)
+    actor_id = get_actor_id(request)
+    try:
+        upsert_user_visibility_mode(actor_id, payload.visibility_mode)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return {"success": True, "visibility_mode": payload.visibility_mode}

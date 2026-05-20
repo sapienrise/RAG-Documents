@@ -9,7 +9,7 @@ from app.core.auth import require_user
 from app.core.config import settings
 from app.core.session import get_actor_id
 from app.models.document import Document, DocumentResponse
-from app.services import storage, parser
+from app.services import storage, parser, credits
 from app.services.drive_tokens import get_tokens, set_tokens
 from app.services.pg_settings import get_drive_settings
 from app.api.documents import _process_document
@@ -21,6 +21,11 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly"
 
 class DriveImportRequest(BaseModel):
     file_id: str
+    visibility: str = "private"
+
+
+class DriveImportFolderRequest(BaseModel):
+    folder_id: str
     visibility: str = "private"
 
 
@@ -80,6 +85,116 @@ async def _refresh_if_needed(actor_id: str) -> dict:
     ).isoformat()
     set_tokens(actor_id, tokens)
     return tokens
+
+
+async def _list_drive_children(access_token: str, folder_id: str) -> list[dict]:
+    files: list[dict] = []
+    page_token = ""
+    async with httpx.AsyncClient(timeout=60) as client:
+        while True:
+            params = {
+                "pageSize": 1000,
+                "fields": "nextPageToken,files(id,name,mimeType,size)",
+                "q": f"trashed=false and '{folder_id}' in parents",
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = await client.get(
+                "https://www.googleapis.com/drive/v3/files",
+                params=params,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code >= 400:
+                raise HTTPException(status_code=resp.status_code, detail="Failed to list Drive folder contents")
+            payload = resp.json()
+            files.extend(payload.get("files", []))
+            page_token = payload.get("nextPageToken", "")
+            if not page_token:
+                break
+    return files
+
+
+async def _import_drive_file_by_id(
+    actor_id: str,
+    access_token: str,
+    file_id: str,
+    visibility: str,
+    background_tasks: BackgroundTasks,
+) -> DocumentResponse:
+    async with httpx.AsyncClient(timeout=60) as client:
+        meta_resp = await client.get(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}",
+            params={"fields": "id,name,mimeType,size"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if meta_resp.status_code >= 400:
+        raise HTTPException(status_code=meta_resp.status_code, detail="Cannot read Drive file metadata")
+    meta = meta_resp.json()
+    name = meta.get("name", f"{file_id}.pdf")
+    mime_type = meta.get("mimeType", "")
+
+    if mime_type == "application/vnd.google-apps.folder":
+        raise HTTPException(status_code=400, detail="Selected item is a folder. Use folder import.")
+
+    # Export Google Docs/Sheets to supported file types.
+    if mime_type == "application/vnd.google-apps.document":
+        download_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export?mimeType=application/pdf"
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+    elif mime_type == "application/vnd.google-apps.spreadsheet":
+        download_url = f"https://www.googleapis.com/drive/v3/files/{file_id}/export?mimeType=text/csv"
+        if not name.lower().endswith(".csv"):
+            name += ".csv"
+    else:
+        download_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+
+    async with httpx.AsyncClient(timeout=180) as client:
+        file_resp = await client.get(
+            download_url,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+    if file_resp.status_code >= 400:
+        raise HTTPException(status_code=file_resp.status_code, detail="Cannot download Drive file")
+
+    ext = os.path.splitext(name)[1].lower()
+    file_type = parser.SUPPORTED_EXTENSIONS.get(ext)
+    if not file_type:
+        raise HTTPException(status_code=415, detail="Unsupported Drive file type for RAG import")
+
+    content = file_resp.content
+    if len(content) > settings.max_file_size_bytes:
+        raise HTTPException(status_code=413, detail=f"File exceeds maximum size of {settings.max_file_size_mb} MB")
+
+    upload_cost = credits.calculate_upload_cost(len(content), file_type, mime_type)
+    charged = credits.charge_usage(
+        actor_id=actor_id,
+        operation="drive_import",
+        credits_charged=upload_cost,
+        metadata='{"source":"drive.import"}',
+    )
+    if not charged:
+        balance = credits.get_credit_balance(actor_id)
+        raise HTTPException(
+            status_code=402,
+            detail=f"Insufficient credits for import. Balance: {balance}, required: {upload_cost}",
+        )
+
+    os.makedirs(settings.storage_dir, exist_ok=True)
+    doc = Document(
+        name=name,
+        file_type=file_type,
+        size_bytes=len(content),
+        visibility=visibility,
+        session_id=actor_id if visibility == "private" else None,
+        status="processing",
+    )
+    file_path = os.path.join(settings.storage_dir, f"{doc.id}{ext}")
+    doc.file_path = file_path
+    with open(file_path, "wb") as f:
+        f.write(content)
+    storage.upsert_document(doc)
+    background_tasks.add_task(_process_document, doc)
+    return DocumentResponse(**doc.model_dump())
 
 
 @router.get("/auth-url")
@@ -169,6 +284,15 @@ async def list_drive_files(request: Request):
     return resp.json()
 
 
+@router.get("/status")
+async def drive_status(request: Request):
+    require_user(request)
+    actor_id = get_actor_id(request)
+    tokens = get_tokens(actor_id) or {}
+    connected = bool(tokens.get("access_token") or tokens.get("refresh_token"))
+    return {"connected": connected}
+
+
 @router.post("/import", response_model=DocumentResponse)
 async def import_drive_file(payload: DriveImportRequest, request: Request, background_tasks: BackgroundTasks):
     require_user(request)
@@ -176,60 +300,54 @@ async def import_drive_file(payload: DriveImportRequest, request: Request, backg
     visibility = payload.visibility if payload.visibility in ("public", "private") else "private"
     tokens = await _refresh_if_needed(actor_id)
 
-    async with httpx.AsyncClient(timeout=60) as client:
-        meta_resp = await client.get(
-            f"https://www.googleapis.com/drive/v3/files/{payload.file_id}",
-            params={"fields": "id,name,mimeType,size"},
-            headers={"Authorization": f"Bearer {tokens['access_token']}"},
-        )
-    if meta_resp.status_code >= 400:
-        raise HTTPException(status_code=meta_resp.status_code, detail="Cannot read Drive file metadata")
-    meta = meta_resp.json()
-    name = meta.get("name", f"{payload.file_id}.pdf")
-    mime_type = meta.get("mimeType", "")
-
-    # Export Google Docs/Sheets to supported file types.
-    if mime_type == "application/vnd.google-apps.document":
-        download_url = f"https://www.googleapis.com/drive/v3/files/{payload.file_id}/export?mimeType=application/pdf"
-        if not name.lower().endswith(".pdf"):
-            name += ".pdf"
-    elif mime_type == "application/vnd.google-apps.spreadsheet":
-        download_url = f"https://www.googleapis.com/drive/v3/files/{payload.file_id}/export?mimeType=text/csv"
-        if not name.lower().endswith(".csv"):
-            name += ".csv"
-    else:
-        download_url = f"https://www.googleapis.com/drive/v3/files/{payload.file_id}?alt=media"
-
-    async with httpx.AsyncClient(timeout=180) as client:
-        file_resp = await client.get(
-            download_url,
-            headers={"Authorization": f"Bearer {tokens['access_token']}"},
-        )
-    if file_resp.status_code >= 400:
-        raise HTTPException(status_code=file_resp.status_code, detail="Cannot download Drive file")
-
-    ext = os.path.splitext(name)[1].lower()
-    file_type = parser.SUPPORTED_EXTENSIONS.get(ext)
-    if not file_type:
-        raise HTTPException(status_code=415, detail="Unsupported Drive file type for RAG import")
-
-    content = file_resp.content
-    if len(content) > settings.max_file_size_bytes:
-        raise HTTPException(status_code=413, detail=f"File exceeds maximum size of {settings.max_file_size_mb} MB")
-
-    os.makedirs(settings.storage_dir, exist_ok=True)
-    doc = Document(
-        name=name,
-        file_type=file_type,
-        size_bytes=len(content),
+    return await _import_drive_file_by_id(
+        actor_id=actor_id,
+        access_token=tokens["access_token"],
+        file_id=payload.file_id,
         visibility=visibility,
-        session_id=actor_id if visibility == "private" else None,
-        status="processing",
+        background_tasks=background_tasks,
     )
-    file_path = os.path.join(settings.storage_dir, f"{doc.id}{ext}")
-    doc.file_path = file_path
-    with open(file_path, "wb") as f:
-        f.write(content)
-    storage.upsert_document(doc)
-    background_tasks.add_task(_process_document, doc)
-    return DocumentResponse(**doc.model_dump())
+
+
+@router.post("/import-folder")
+async def import_drive_folder(payload: DriveImportFolderRequest, request: Request, background_tasks: BackgroundTasks):
+    require_user(request)
+    actor_id = get_actor_id(request)
+    visibility = payload.visibility if payload.visibility in ("public", "private") else "private"
+    tokens = await _refresh_if_needed(actor_id)
+    access_token = tokens["access_token"]
+
+    to_visit = [payload.folder_id]
+    imported: list[DocumentResponse] = []
+    skipped: list[dict] = []
+
+    while to_visit:
+        folder_id = to_visit.pop()
+        children = await _list_drive_children(access_token, folder_id)
+        for item in children:
+            mime_type = item.get("mimeType", "")
+            item_id = item.get("id", "")
+            name = item.get("name", item_id)
+            if not item_id:
+                continue
+            if mime_type == "application/vnd.google-apps.folder":
+                to_visit.append(item_id)
+                continue
+            try:
+                doc = await _import_drive_file_by_id(
+                    actor_id=actor_id,
+                    access_token=access_token,
+                    file_id=item_id,
+                    visibility=visibility,
+                    background_tasks=background_tasks,
+                )
+                imported.append(doc)
+            except HTTPException as e:
+                if e.status_code == 415:
+                    skipped.append({"id": item_id, "name": name, "reason": "unsupported_type"})
+                else:
+                    skipped.append({"id": item_id, "name": name, "reason": f"error_{e.status_code}"})
+            except Exception:
+                skipped.append({"id": item_id, "name": name, "reason": "error"})
+
+    return {"imported_count": len(imported), "skipped_count": len(skipped), "documents": imported, "skipped": skipped}

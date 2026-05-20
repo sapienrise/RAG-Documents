@@ -187,6 +187,31 @@ def delete_document(doc_id: str) -> None:
     _fallback_save(rows)
 
 
+def update_document_visibility(doc_id: str, visibility: str, session_id: Optional[str]) -> None:
+    if _supports_chroma():
+        collection = _get_chroma()
+        results = collection.get(where={"document_id": doc_id}, include=["metadatas"])
+        ids = results.get("ids") or []
+        metas = results.get("metadatas") or []
+        if not ids:
+            return
+        new_metas = []
+        for meta in metas:
+            m = dict(meta or {})
+            m["visibility"] = visibility
+            m["session_id"] = session_id or ""
+            new_metas.append(m)
+        collection.update(ids=ids, metadatas=new_metas)
+        return
+
+    rows = _fallback_load()
+    for row in rows:
+        if row.get("document_id") == doc_id:
+            row["visibility"] = visibility
+            row["session_id"] = session_id or ""
+    _fallback_save(rows)
+
+
 def query(
     question: str,
     session_id: str,
@@ -243,6 +268,7 @@ def query(
                     "text": doc,
                     "document_id": meta["document_id"],
                     "document_name": meta["document_name"],
+                    "visibility": meta.get("visibility", "public"),
                     "page_number": meta.get("page_number"),
                     "distance": dist,
                 }
@@ -285,6 +311,7 @@ def query(
                 "text": row["text"],
                 "document_id": row["document_id"],
                 "document_name": row["document_name"],
+                "visibility": row.get("visibility", "public"),
                 "page_number": row.get("page_number"),
                 "distance": _fallback_distance(question, row["text"]),
             }

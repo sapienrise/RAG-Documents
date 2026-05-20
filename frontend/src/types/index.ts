@@ -15,6 +15,7 @@ export interface Document {
 export interface Citation {
   document_id: string;
   document_name: string;
+  visibility?: Visibility;
   page_number?: number;
   excerpt: string;
 }
@@ -51,4 +52,5 @@ export interface DriveSettings {
   google_redirect_uri: string;
   frontend_url: string;
   other_data: string;
+  default_visibility?: Visibility;
 }

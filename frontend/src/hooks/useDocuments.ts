@@ -3,7 +3,7 @@ import { documentsApi } from "../services/api";
 import type { Document } from "../types";
 import toast from "react-hot-toast";
 
-export function useDocuments() {
+export function useDocuments(onCreditsChanged?: () => void) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -39,6 +39,7 @@ export function useDocuments() {
         const doc = await documentsApi.upload(file, visibility);
         setDocuments((prev) => [doc, ...prev]);
         toast.success(`${file.name} uploaded — processing...`, { id: toastId });
+        onCreditsChanged?.();
         return doc;
       } catch (err: any) {
         const msg = err?.response?.data?.detail || "Upload failed";
@@ -46,7 +47,7 @@ export function useDocuments() {
         throw err;
       }
     },
-    []
+    [onCreditsChanged]
   );
 
   const remove = useCallback(async (id: string) => {
@@ -59,5 +60,19 @@ export function useDocuments() {
     }
   }, []);
 
-  return { documents, loading, upload, remove, refresh: fetchDocuments };
+  const updateVisibility = useCallback(
+    async (id: string, visibility: "public" | "private") => {
+      try {
+        const updated = await documentsApi.updateVisibility(id, visibility);
+        setDocuments((prev) => prev.map((d) => (d.id === id ? updated : d)));
+        toast.success(`Moved to ${visibility}`);
+      } catch (err: any) {
+        const msg = err?.response?.data?.detail || "Failed to update visibility";
+        toast.error(msg);
+      }
+    },
+    []
+  );
+
+  return { documents, loading, upload, remove, updateVisibility, refresh: fetchDocuments };
 }

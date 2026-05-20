@@ -3,7 +3,7 @@ import { chatApi } from "../services/api";
 import type { ChatMessage } from "../types";
 import toast from "react-hot-toast";
 
-export function useChat(selectedDocIds: string[]) {
+export function useChat(selectedDocIds: string[], onCreditsChanged?: () => void) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -40,6 +40,7 @@ export function useChat(selectedDocIds: string[]) {
             citations: response.citations,
           },
         ]);
+        onCreditsChanged?.();
       } catch (err: any) {
         const msg = err?.response?.data?.detail || "Failed to get answer";
         toast.error(msg);
@@ -48,7 +49,7 @@ export function useChat(selectedDocIds: string[]) {
         setIsLoading(false);
       }
     },
-    [messages, isLoading, selectedDocIds]
+    [messages, isLoading, selectedDocIds, onCreditsChanged]
   );
 
   const clearChat = useCallback(() => {

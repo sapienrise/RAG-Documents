@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Literal
 import psycopg
 from psycopg.rows import dict_row
 from app.core.config import settings
@@ -34,8 +34,15 @@ def ensure_table() -> None:
                 CREATE TABLE IF NOT EXISTS {USER_TABLE} (
                     actor_id TEXT PRIMARY KEY,
                     google_drive_api_key TEXT DEFAULT '',
+                    default_visibility TEXT DEFAULT 'public',
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
+                """
+            )
+            cur.execute(
+                f"""
+                ALTER TABLE {USER_TABLE}
+                ADD COLUMN IF NOT EXISTS default_visibility TEXT DEFAULT 'public'
                 """
             )
         conn.commit()
@@ -55,7 +62,7 @@ def get_drive_settings(actor_id: str) -> Optional[dict]:
             common_row = cur.fetchone()
             cur.execute(
                 f"""
-                SELECT google_drive_api_key
+                SELECT google_drive_api_key, COALESCE(default_visibility, 'public') AS default_visibility
                 FROM {USER_TABLE}
                 WHERE actor_id = %s
                 """,
@@ -66,6 +73,7 @@ def get_drive_settings(actor_id: str) -> Optional[dict]:
                 return None
             data = dict(common_row)
             data["google_drive_api_key"] = (user_row or {}).get("google_drive_api_key", "")
+            data["default_visibility"] = (user_row or {}).get("default_visibility", "public")
             return data
 
 
@@ -77,6 +85,7 @@ def upsert_drive_settings(
     google_redirect_uri: str,
     frontend_url: str,
     other_data: str = "",
+    default_visibility: Literal["public", "private"] = "public",
 ) -> None:
     ensure_table()
     with _connect() as conn:
@@ -105,12 +114,48 @@ def upsert_drive_settings(
             cur.execute(
                 f"""
                 INSERT INTO {USER_TABLE}
-                (actor_id, google_drive_api_key, updated_at)
-                VALUES (%s, %s, NOW())
+                (actor_id, google_drive_api_key, default_visibility, updated_at)
+                VALUES (%s, %s, %s, NOW())
                 ON CONFLICT (actor_id) DO UPDATE SET
                     google_drive_api_key = EXCLUDED.google_drive_api_key,
+                    default_visibility = EXCLUDED.default_visibility,
                     updated_at = NOW()
                 """,
-                (actor_id, google_drive_api_key),
+                (actor_id, google_drive_api_key, default_visibility),
+            )
+        conn.commit()
+
+
+def get_user_visibility_mode(actor_id: str) -> Literal["public", "private"]:
+    ensure_table()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COALESCE(default_visibility, 'public') AS default_visibility
+                FROM {USER_TABLE}
+                WHERE actor_id = %s
+                """,
+                (actor_id,),
+            )
+            row = cur.fetchone()
+            mode = (row or {}).get("default_visibility", "public")
+            return "private" if mode == "private" else "public"
+
+
+def upsert_user_visibility_mode(actor_id: str, visibility: Literal["public", "private"]) -> None:
+    ensure_table()
+    with _connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                INSERT INTO {USER_TABLE}
+                (actor_id, google_drive_api_key, default_visibility, updated_at)
+                VALUES (%s, '', %s, NOW())
+                ON CONFLICT (actor_id) DO UPDATE SET
+                    default_visibility = EXCLUDED.default_visibility,
+                    updated_at = NOW()
+                """,
+                (actor_id, visibility),
             )
         conn.commit()

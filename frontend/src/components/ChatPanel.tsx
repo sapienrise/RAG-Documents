@@ -10,17 +10,20 @@ import {
   MessageSquare,
 } from "lucide-react";
 import type { ChatMessage, Citation } from "../types";
+import type { Visibility } from "../types";
 
 interface Props {
   messages: ChatMessage[];
   isLoading: boolean;
   selectedDocCount: number;
+  visibilityMode: Visibility;
   onSend: (question: string) => void;
   onClear: () => void;
 }
 
 function CitationCard({ citation }: { citation: Citation }) {
   const [expanded, setExpanded] = useState(false);
+  const isPrivate = citation.visibility === "private";
   return (
     <div className="border border-gray-700 rounded-lg overflow-hidden text-xs">
       <button
@@ -29,7 +32,8 @@ function CitationCard({ citation }: { citation: Citation }) {
       >
         <FileText className="w-3.5 h-3.5 text-brand-400 flex-shrink-0" />
         <span className="text-gray-300 flex-1 truncate">
-          {citation.page_number ? `Page ${citation.page_number}` : "Source"}
+          {isPrivate ? "Source" : citation.document_name}
+          {citation.page_number ? ` • Page ${citation.page_number}` : ""}
         </span>
         {expanded ? (
           <ChevronUp className="w-3.5 h-3.5 text-gray-500" />
@@ -46,9 +50,28 @@ function CitationCard({ citation }: { citation: Citation }) {
   );
 }
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({ message, visibilityMode }: { message: ChatMessage; visibilityMode: Visibility }) {
   const isUser = message.role === "user";
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const hasPrivateCitations = (message.citations || []).some(
+    (c) => c.visibility === "private"
+  );
+  const filteredCitations = (message.citations || []).filter((c) => {
+    const q = sourceQuery.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      c.document_name.toLowerCase().includes(q) ||
+      c.excerpt.toLowerCase().includes(q)
+    );
+  });
+
+  const displayContent =
+    !message.isLoading && visibilityMode === "private"
+      ? message.content
+          .replace(/\[Document:\s*[^\]]+\]/gi, "")
+          .replace(/Source:\s*[^\n]+/gi, "Source: Private document")
+      : message.content;
 
   return (
     <div className={`flex gap-3 ${isUser ? "flex-row-reverse" : ""}`}>
@@ -81,14 +104,16 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <div className="w-2 h-2 bg-brand-400 rounded-full animate-bounce [animation-delay:300ms]" />
             </div>
           ) : (
-            <div className="whitespace-pre-wrap">{message.content}</div>
+            <div className="whitespace-pre-wrap">{displayContent}</div>
           )}
         </div>
 
         {/* Citations */}
         {!message.isLoading &&
           message.citations &&
-          message.citations.length > 0 && (
+          message.citations.length > 0 &&
+          visibilityMode !== "private" &&
+          !hasPrivateCitations && (
             <div className="max-w-[85%] w-full">
               <button
                 className="w-full flex items-center gap-2 px-3 py-2 bg-gray-800 hover:bg-gray-750 text-left rounded-lg border border-gray-700"
@@ -106,9 +131,21 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               </button>
               {sourcesOpen && (
                 <div className="mt-1 space-y-1">
-                  {message.citations.map((c, i) => (
-                    <CitationCard key={i} citation={c} />
-                  ))}
+                  <input
+                    value={sourceQuery}
+                    onChange={(e) => setSourceQuery(e.target.value)}
+                    placeholder="Search sources..."
+                    className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-brand-500"
+                  />
+                  {filteredCitations.length === 0 ? (
+                    <div className="text-xs text-gray-500 px-1 py-1">
+                      No matching sources
+                    </div>
+                  ) : (
+                    filteredCitations.map((c, i) => (
+                      <CitationCard key={i} citation={c} />
+                    ))
+                  )}
                 </div>
               )}
             </div>
@@ -122,6 +159,7 @@ export default function ChatPanel({
   messages,
   isLoading,
   selectedDocCount,
+  visibilityMode,
   onSend,
   onClear,
 }: Props) {
@@ -207,7 +245,7 @@ export default function ChatPanel({
             </div>
           </div>
         ) : (
-          messages.map((msg, i) => <MessageBubble key={i} message={msg} />)
+          messages.map((msg, i) => <MessageBubble key={i} message={msg} visibilityMode={visibilityMode} />)
         )}
         <div ref={endRef} />
       </div>

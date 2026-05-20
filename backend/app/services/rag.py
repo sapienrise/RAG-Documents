@@ -137,6 +137,7 @@ def answer(
                 Citation(
                     document_id=chunk["document_id"],
                     document_name=chunk["document_name"],
+                    visibility=chunk.get("visibility"),
                     page_number=chunk.get("page_number"),
                     excerpt=chunk["text"][:300] + ("..." if len(chunk["text"]) > 300 else ""),
                 )

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import documents, chat, auth, drive, settings as app_settings_router
+from app.api import documents, chat, auth, drive, settings as app_settings_router, billing
 
 app = FastAPI(
     title="Document Intelligence RAG Chat",
@@ -22,6 +22,7 @@ app.include_router(chat.router)
 app.include_router(auth.router)
 app.include_router(drive.router)
 app.include_router(app_settings_router.router)
+app.include_router(billing.router)
 
 
 @app.get("/health")

@@ -35,9 +35,14 @@ class DocumentResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+class DocumentVisibilityUpdateRequest(BaseModel):
+    visibility: Literal["public", "private"]
+
+
 class Citation(BaseModel):
     document_id: str
     document_name: str
+    visibility: Optional[Literal["public", "private"]] = None
     page_number: Optional[int] = None
     excerpt: str
 
